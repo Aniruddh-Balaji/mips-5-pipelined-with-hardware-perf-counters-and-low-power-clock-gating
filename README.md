@@ -218,3 +218,90 @@ wire regfile_gated_clk =
 ```
 
 This ensures glitch-free clock gating for the register file.
+# forwarding unit
+```` verilog
+always @(*) begin
+    forwardA = 2'b00;
+    forwardB = 2'b00;
+
+    // EX hazard forwarding
+    if (EX_MEM_regwrite &&
+        EX_MEM_rd != 0 &&
+        EX_MEM_rd == ID_EX_rs)
+        forwardA = 2'b10;
+
+    if (EX_MEM_regwrite &&
+        EX_MEM_rd != 0 &&
+        EX_MEM_rd == ID_EX_rt)
+        forwardB = 2'b10;
+
+    // MEM hazard forwarding
+    if (MEM_WB_regwrite &&
+        MEM_WB_rd != 0 &&
+        MEM_WB_rd == ID_EX_rs &&
+        !(EX_MEM_regwrite && EX_MEM_rd == ID_EX_rs))
+        forwardA = 2'b01;
+
+    if (MEM_WB_regwrite &&
+        MEM_WB_rd != 0 &&
+        MEM_WB_rd == ID_EX_rt &&
+        !(EX_MEM_regwrite && EX_MEM_rd == ID_EX_rt))
+        forwardB = 2'b01;
+end
+````
+```` verilog
+assign alu_op1 =
+    (forwardA == 2'b00) ? ID_EX_regdata1 :
+    (forwardA == 2'b10) ? EX_MEM_aluout :
+                          MEM_WB_aluout;
+
+assign alu_op2 =
+    ID_EX_alu_src ? ID_EX_imm :
+    (forwardB == 2'b00) ? ID_EX_regdata2 :
+    (forwardB == 2'b10) ? EX_MEM_aluout :
+                          MEM_WB_aluout;
+````
+# stall unit
+```` verilog
+wire stall;
+wire load_use_stall;
+wire branch_stall;
+
+assign load_use_stall =
+    ID_EX_memread &&
+    (ID_EX_rt != 0) &&
+    (
+        (ID_EX_rt == id_rs) ||
+        (ID_EX_rt == id_rt)
+    );
+
+assign branch_stall =
+    (id_opcode == 6'b000100) &&
+    (
+        (ID_EX_regwrite &&
+         (ID_EX_rd != 0) &&
+         ((ID_EX_rd == id_rs) || (ID_EX_rd == id_rt)))
+        ||
+        (EX_MEM_regwrite &&
+         (EX_MEM_rd != 0) &&
+         ((EX_MEM_rd == id_rs) || (EX_MEM_rd == id_rt)))
+    );
+
+assign stall = load_use_stall || branch_stall;
+````
+```` verilog
+else if(stall) begin
+    pc <= pc;
+    IF_ID_instr <= IF_ID_instr;
+    IF_ID_pc <= IF_ID_pc;
+
+    ID_EX_regwrite <= 0;
+    ID_EX_memread <= 0;
+    ID_EX_memwrite <= 0;
+    ID_EX_memtoreg <= 0;
+    ID_EX_alu_src <= 0;
+    ID_EX_alu_ctrl <= 0;
+end
+````
+
+
